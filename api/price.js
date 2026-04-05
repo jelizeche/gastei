@@ -1,4 +1,4 @@
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Cache-Control', 'public, max-age=300');
 
@@ -27,7 +27,7 @@ export default async function handler(req, res) {
     clearTimeout(timeout);
 
     if (!response.ok) {
-      return res.status(200).json({ price: null, symbol: symbol });
+      return res.status(200).json({ price: null, symbol });
     }
 
     const json = await response.json();
@@ -37,9 +37,9 @@ export default async function handler(req, res) {
                   json.chart.result[0].meta &&
                   json.chart.result[0].meta.regularMarketPrice;
 
-    res.status(200).json({ price: price || null, symbol: symbol });
+    res.status(200).json({ price: price || null, symbol });
 
   } catch (err) {
-    res.status(200).json({ price: null, symbol: symbol });
+    res.status(200).json({ price: null, symbol });
   }
-}
+};
