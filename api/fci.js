@@ -5,20 +5,25 @@ const PLATFORM_MAP = [
   { platform: 'Personal Pay',  keywords: ['delta pesos', 'personal pay'],              color: '#00bcd4', icon: 'PP' },
   { platform: 'Claro Pay',     keywords: ['sbs ahorro', 'claro pay'],                  color: '#e53935', icon: 'CLA'},
   { platform: 'Brubank',       keywords: ['brubank', 'bru '],                          color: '#6c2bd9', icon: 'BRU'},
-  { platform: 'FIMA (Galicia)',keywords: ['fima', 'galicia ahorro', 'galicia pesos'],  color: '#007d3c', icon: 'FIM'},
-  { platform: 'Santander',     keywords: ['santander super', 'super ahorro'],          color: '#e31837', icon: 'SAN'},
-  { platform: 'BBVA',          keywords: ['frances', 'bbva', 'frances ahorro'],        color: '#004c97', icon: 'BBV'},
-  { platform: 'Macro',         keywords: ['macro ahorro', 'fondomax'],                 color: '#f5a623', icon: 'MAC'},
+  { platform: 'FIMA (Galicia)',keywords: ['fima premium', 'fima ahorro', 'galicia'],   color: '#007d3c', icon: 'FIM'},
+  { platform: 'Santander',     keywords: ['super ahorro'],                             color: '#e31837', icon: 'SAN'},
+  { platform: 'BBVA',          keywords: ['frances', 'bbva'],                          color: '#004c97', icon: 'BBV'},
+  { platform: 'Macro',         keywords: ['max money market', 'macro ahorro'],         color: '#f5a623', icon: 'MAC'},
   { platform: 'Prex',          keywords: ['allaria ahorro', 'prex'],                   color: '#00c9a7', icon: 'PRX'},
   { platform: 'IEB+',          keywords: ['ieb ahorro', 'adcap ahorro'],               color: '#1565c0', icon: 'IEB'},
   { platform: 'Cocos',         keywords: ['cocos'],                                    color: '#8e44ad', icon: 'COC'},
-  { platform: 'Lemon',         keywords: ['lemon', 'lemon cash'],                      color: '#f9ca24', icon: 'LEM'},
+  { platform: 'Lemon',         keywords: ['lemon'],                                    color: '#f9ca24', icon: 'LEM'},
+  { platform: 'Balanz',        keywords: ['balanz money market'],                      color: '#1a1a2e', icon: 'BAL'},
 ];
 
-function calcTNA(cp1, cp2, days) {
-  if (!cp1 || !cp2 || !days || days === 0) return null;
-  const dailyReturn = (cp2 - cp1) / cp1;
-  return (dailyReturn / days) * 365 * 100;
+const API_BASE = 'https://api.argentinadatos.com/v1/finanzas/fci/mercadoDinero';
+
+async function fetchJSON(url) {
+  const res = await fetch(url, {
+    headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' }
+  });
+  if (!res.ok) throw new Error('API returned ' + res.status);
+  return res.json();
 }
 
 export default async function handler(req, res) {
@@ -26,40 +31,50 @@ export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'public, max-age=1800');
 
   try {
-    const response = await fetch('https://api.argentinadatos.com/v1/finanzas/fci/mercadoDinero/ultimo', {
-      headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' }
-    });
+    const [ultimo, penultimo] = await Promise.all([
+      fetchJSON(API_BASE + '/ultimo'),
+      fetchJSON(API_BASE + '/penultimo'),
+    ]);
 
-    if (!response.ok) throw new Error('ArgentinaDatos returned ' + response.status);
-
-    const data = await response.json();
-
-    if (!Array.isArray(data)) {
-      return res.status(200).json({ rates: [], error: 'No data' });
+    if (!Array.isArray(ultimo) || !Array.isArray(penultimo)) {
+      return res.status(200).json({ rates: [], error: 'Invalid API response' });
     }
+
+    const prevMap = {};
+    penultimo.forEach(fund => {
+      if (fund.fondo && fund.vcp != null) {
+        prevMap[fund.fondo] = { vcp: fund.vcp, fecha: fund.fecha };
+      }
+    });
 
     const matched = [];
     const usedPlatforms = new Set();
 
-    data.forEach(fund => {
-      const nameLower = (fund.nombre || '').toLowerCase();
+    ultimo.forEach(fund => {
+      if (fund.vcp == null || !fund.fondo || !fund.fecha) return;
+
+      const nameLower = fund.fondo.toLowerCase();
+
       const platform = PLATFORM_MAP.find(p =>
         p.keywords.some(k => nameLower.includes(k))
       );
       if (!platform || usedPlatforms.has(platform.platform)) return;
 
-      const vcp = parseFloat(fund.vcp || fund.valorCuotaparte || 0);
-      const vcpAnt = parseFloat(fund.vcpAnterior || fund.valorCuotaparteAnterior || 0);
-      const dias = parseInt(fund.diasHabiles || fund.dias || 1);
+      const vcpHoy = parseFloat(fund.vcp);
+      const prev = prevMap[fund.fondo];
+      if (!prev) return;
+      const vcpAnt = parseFloat(prev.vcp);
 
-      let tna = null;
-      if (vcp && vcpAnt) {
-        tna = calcTNA(vcpAnt, vcp, dias);
-      } else if (fund.tna) {
-        tna = parseFloat(fund.tna);
-      }
+      if (!vcpHoy || !vcpAnt || vcpAnt <= 0) return;
 
-      if (tna && tna > 0 && tna < 500) {
+      const fechaUlt = new Date(fund.fecha);
+      const fechaPen = new Date(prev.fecha);
+      const diffDays = Math.max(1, Math.round((fechaUlt - fechaPen) / 86400000));
+
+      const dailyReturn = (vcpHoy - vcpAnt) / vcpAnt;
+      const tna = (dailyReturn / diffDays) * 365 * 100;
+
+      if (tna > 0 && tna < 500) {
         usedPlatforms.add(platform.platform);
         matched.push({
           platform: platform.platform,
@@ -67,7 +82,7 @@ export default async function handler(req, res) {
           color:    platform.color,
           tna:      Math.round(tna * 100) / 100,
           tea:      Math.round((Math.pow(1 + tna / 100 / 365, 365) - 1) * 10000) / 100,
-          fondo:    fund.nombre,
+          fondo:    fund.fondo,
           fecha:    fund.fecha,
         });
       }
