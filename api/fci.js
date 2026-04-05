@@ -26,7 +26,7 @@ async function fetchJSON(url) {
   return res.json();
 }
 
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Cache-Control', 'public, max-age=1800');
 
@@ -95,4 +95,4 @@ export default async function handler(req, res) {
   } catch (err) {
     res.status(200).json({ rates: [], error: err.message });
   }
-}
+};
